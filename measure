@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+import os
+from collections import defaultdict
+
+import pandas as pd
+import yaml
+from redis import Redis as RedisClient
+from measure import Measure
+
+DESC = "Redis measure driver for Opsani Optune"
+VERSION = "0.0.1"
+HAS_CANCEL = True
+
+records = pd.read_csv('~/hn_posts.csv')  # , converters={'created_at': lambda v: pd.to_datetime(v)})
+rank = records['rank'] = records['num_comments'] + records['num_points']
+records = records.sort_values('rank')[:8000]
+rnd = open('/home/ubuntu/optune/oco/rnd.txt', 'r').read()[:10*1024]
+
+
+def init_redis_client():
+    k8s_secret_fpath = os.environ.get('OPTUNE_REDIS_K8S_SECRET_FPATH', None)
+    kwargs = {}
+    if k8s_secret_fpath:
+        with open(k8s_secret_fpath, 'r') as sf:
+            secret = yaml.load(sf)
+            kwargs.update(secret)
+    else:
+        prefix = 'optune_redis_'
+        kwargs.update(**{k.lower()[len(prefix):]: v
+                         for k, v in os.environ.items()
+                         if k.lower().startswith(prefix)})
+    return RedisClient(**kwargs)
+
+
+client = init_redis_client()
+
+
+def exec_reqs(batches_count, requests_count):
+    for _ in range(0, batches_count):
+        for _, record in records.sample(n=requests_count, weights=rank).iterrows():
+            if client.get(name=record['id']) is None:
+                client.set(name=record['id'], value=rnd)
+                yield 0
+            else:
+                yield 1
+
+
+class RedisDriver(Measure):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.client = init_redis_client()
+
+    def measure(self):
+        batches_count = self.input_data.get('control', {}).get('userdata', {}).get('batches', 10)
+        requests_count = self.input_data.get('control', {}).get('userdata', {}).get('requests_per_batch', 5000)
+        warmup_batches = self.input_data.get('control', {}).get('warmup', 2)
+
+        self.client.flushdb()
+        total_hits = defaultdict(int)
+
+        self.progress = 0
+        self.progress_message = "Start benchmark"
+        self.print_progress()
+        evictions = self.client.info('stats')['evicted_keys']
+        for idx, hit in enumerate(exec_reqs(batches_count, requests_count)):
+            current_batch_number = int(idx / requests_count) + 1
+            evicted = self.client.info('stats')['evicted_keys'] - evictions
+            hits_r = 1 - (evicted + 1) / (idx + 1)
+            self.progress = int(idx / (batches_count * requests_count) * 100)
+            self.progress_message = "Sent {} requests in {} batches. {} batches to go. Hits {}%".format(
+                idx, current_batch_number, batches_count - current_batch_number,
+                round(hits_r * 100, 2),
+            )
+            total_hits[current_batch_number] += hit
+
+        total_hits = list(total_hits.values())
+        print(total_hits)
+        hits_percentage_value = float(
+            round(
+                sum(total_hits[warmup_batches:]) / ((batches_count - warmup_batches) * requests_count),
+                4,
+            ) * 100,
+        )
+        metrics = {
+            'hits_percentage': {
+                'value': hits_percentage_value,
+                'unit': "percentage",
+                'annotation': "Percentage of hits relative to requests count.",
+            },
+        }
+
+        self.progress = 100
+        self.progress_message = "Benchmark completed"
+        self.print_progress()
+
+        return metrics, {}
+
+    def describe(self):
+        return {
+            'hits_percentage': {
+                'unit': 'percentage',
+            },
+        }
+
+    def handle_cancel(self, *_, **__):
+        print("\nCancelling measurement")
+        self.client.flushdb()
+        quit()
+
+
+if __name__ == '__main__':
+    driver = RedisDriver(cli_desc=DESC, supports_cancel=HAS_CANCEL, version=VERSION, progress_interval=1)
+    driver.run()
