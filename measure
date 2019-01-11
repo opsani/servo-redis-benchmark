@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
-from collections import defaultdict
+from collections import deque
+from statistics import median, mean
 
 import pandas as pd
 import yaml
@@ -11,38 +12,64 @@ DESC = "Redis measure driver for Opsani Optune"
 VERSION = "0.0.1"
 HAS_CANCEL = True
 
-records = pd.read_csv('~/hn_posts.csv')  # , converters={'created_at': lambda v: pd.to_datetime(v)})
-rank = records['rank'] = records['num_comments'] + records['num_points']
-records = records.sort_values('rank')[:8000]
-rnd = open('/home/ubuntu/optune/oco/rnd.txt', 'r').read()[:10*1024]
+
+# def calc_decayed_rank(rnk, time):
+#     most_recent_datetime = max(time)
+#     diff = most_recent_datetime - time
+#     diff = diff.dt.total_seconds().astype(int)
+#     diff_max = max(diff)
+#     time_decay = 1 - diff / diff_max
+#     return rnk ** time_decay
 
 
 def init_redis_client():
-    k8s_secret_fpath = os.environ.get('OPTUNE_REDIS_K8S_SECRET_FPATH', None)
-    kwargs = {}
-    if k8s_secret_fpath:
-        with open(k8s_secret_fpath, 'r') as sf:
-            secret = yaml.load(sf)
-            kwargs.update(secret)
-    else:
-        prefix = 'optune_redis_'
-        kwargs.update(**{k.lower()[len(prefix):]: v
-                         for k, v in os.environ.items()
-                         if k.lower().startswith(prefix)})
+    prefix = 'optune_redis_'
+    kwargs = {k.lower()[len(prefix):]: v
+              for k, v in os.environ.items()
+              if k.lower().startswith(prefix)}
     return RedisClient(**kwargs)
 
+
+records = pd.read_csv('~/hn_posts_updated.csv')
+records['created_at'] = records['created_at'].astype('datetime64[ns]')
+# rank = records['rank'] = records['num_comments'] + records['num_points']
+# records['rank_decayed'] = calc_decayed_rank(records['rank'], records['created_at'])
+# records.to_csv('~/hn_posts_updated.csv')
+
+
+r_total = len(records)
+r_popular_rank_cutoff = 100
+r_popular = records[records['rank_decayed'] > r_popular_rank_cutoff]
+r_popular_count = len(r_popular)
+# r_popular_pct = r_popular_count / records_total
+r_unpopular = records[records['rank_decayed'] <= r_popular_rank_cutoff]
+r_unpopular_len = len(r_unpopular)
+# r_unpopular_pct = r_unpopular_len / records_total
+
+popular_posts_frac = .75
+average_post_size_in_bytes = 75 * 1024
+post_contents = open('/home/ubuntu/optune/oco/rnd.txt', 'r').read()[:average_post_size_in_bytes]
+
+u_posts_read = 100
+u_popular_count = int(u_posts_read * popular_posts_frac)
+u_unpopular_count = u_posts_read - u_popular_count
 
 client = init_redis_client()
 
 
-def exec_reqs(batches_count, requests_count):
-    for _ in range(0, batches_count):
-        for _, record in records.sample(n=requests_count, weights=rank).iterrows():
-            if client.get(name=record['id']) is None:
-                client.set(name=record['id'], value=rnd)
-                yield 0
-            else:
-                yield 1
+def execute_access_pattern():
+    r_pop = r_popular.sample(n=u_popular_count, replace=True)
+    r_unpop = r_unpopular.sample(n=u_unpopular_count, replace=True)
+    ds = r_pop.append(r_unpop)
+    hits = 0
+
+    for _, r in ds.iterrows():
+        if client.get(name=r.id) is None:
+            client.set(name=r.id, value=post_contents)
+            continue
+        hits += 1
+
+    return hits / u_posts_read
 
 
 class RedisDriver(Measure):
@@ -51,41 +78,39 @@ class RedisDriver(Measure):
         self.client = init_redis_client()
 
     def measure(self):
-        batches_count = self.input_data.get('control', {}).get('userdata', {}).get('batches', 10)
-        requests_count = self.input_data.get('control', {}).get('userdata', {}).get('requests_per_batch', 5000)
-        warmup_batches = self.input_data.get('control', {}).get('warmup', 2)
-
-        self.client.flushdb()
-        total_hits = defaultdict(int)
+        # user_data = self.input_data.setdefault('control', {}).setdefault('userdata', {})
 
         self.progress = 0
-        self.progress_message = "Start benchmark"
+        self.progress_message = "Benchmark started"
         self.print_progress()
-        evictions = self.client.info('stats')['evicted_keys']
-        for idx, hit in enumerate(exec_reqs(batches_count, requests_count)):
-            current_batch_number = int(idx / requests_count) + 1
-            evicted = self.client.info('stats')['evicted_keys'] - evictions
-            hits_r = 1 - (evicted + 1) / (idx + 1)
-            self.progress = int(idx / (batches_count * requests_count) * 100)
-            self.progress_message = "Sent {} requests in {} batches. {} batches to go. Hits {}%".format(
-                idx, current_batch_number, batches_count - current_batch_number,
-                round(hits_r * 100, 2),
-            )
-            total_hits[current_batch_number] += hit
 
-        total_hits = list(total_hits.values())
-        print(total_hits)
-        hits_percentage_value = float(
-            round(
-                sum(total_hits[warmup_batches:]) / ((batches_count - warmup_batches) * requests_count),
-                4,
-            ) * 100,
-        )
+        # Fill up the cache
+        def get_mem_left_pct():
+            used = int(self.client.info('memory')['used_memory']) / 1024 / 1024
+            maxmem = int(self.client.config_get('maxmemory')['maxmemory']) / 1024 / 1024
+            return round((1 - used / maxmem) * 100, 3)
+
+        # Fill up cache before sampling measurements
+        self.progress_message = 'Filling up cache'
+        for i in range(1000):
+            execute_access_pattern()
+            self.progress = int((i / 1000) * 50)
+            # Evictions become to appear - cache is filled up
+            if get_mem_left_pct() < .1:
+                self.progress = 50
+                break
+
+        # Sample measurements (hits to total requests ratio)
+        samples = []
+        for i in range(7):
+            samples.append(execute_access_pattern())
+            self.progress = 50 + int(i / 7 * 50)
+
         metrics = {
-            'hits_percentage': {
-                'value': hits_percentage_value,
-                'unit': "percentage",
-                'annotation': "Percentage of hits relative to requests count.",
+            'hits': {
+                'values': [{'data': [(i, frac) for i, frac in enumerate(samples)]}],
+                'unit': "fraction",
+                'annotation': "Hits to total requests ratio.",
             },
         }
 
@@ -97,8 +122,8 @@ class RedisDriver(Measure):
 
     def describe(self):
         return {
-            'hits_percentage': {
-                'unit': 'percentage',
+            'hits': {
+                'unit': 'fraction',
             },
         }
 
