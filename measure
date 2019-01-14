@@ -136,8 +136,7 @@ class RedisDriver(Measure):
 
     def handle_cancel(self, *_, **__):
         print("\nCancelling measurement")
-        self.client.flushdb()
-        quit()
+        quit(0)
 
 
 if __name__ == '__main__':
