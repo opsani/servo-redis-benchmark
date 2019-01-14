@@ -69,7 +69,7 @@ def execute_access_pattern():
             continue
         hits += 1
 
-    return hits / u_posts_read
+    return hits / u_posts_read * 100
 
 
 class RedisDriver(Measure):
@@ -102,15 +102,19 @@ class RedisDriver(Measure):
 
         # Sample measurements (hits to total requests ratio)
         samples = []
-        for i in range(7):
+        samples_take = 20
+        for i in range(samples_take):
             samples.append(execute_access_pattern())
-            self.progress = 50 + int(i / 7 * 50)
+            self.progress = 50 + int(i / samples_take * 50)
 
         metrics = {
             'hits': {
                 'values': [{'data': [(i, frac) for i, frac in enumerate(samples)]}],
-                'unit': "fraction",
-                'annotation': "Hits to total requests ratio.",
+                'annotation': "Percentage of hits",
+            },
+            'perf': {
+                'value': None,
+                'unit': '% hits',
             },
         }
 
@@ -123,8 +127,11 @@ class RedisDriver(Measure):
     def describe(self):
         return {
             'hits': {
-                'unit': 'fraction',
+                'unit': "percentage",
             },
+            'perf': {
+                'unit': '% hits',
+            }
         }
 
     def handle_cancel(self, *_, **__):
