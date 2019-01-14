@@ -21,7 +21,6 @@ def init_redis_client():
 
 
 records = pd.read_csv('/tmp/posts.csv')
-records['created_at'] = records['created_at'].astype('datetime64[ns]')
 
 
 r_total = len(records)
