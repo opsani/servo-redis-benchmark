@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
 import os
-from collections import deque
-from statistics import median, mean
+import random
+import string
 
 import pandas as pd
-import yaml
 from redis import Redis as RedisClient
 from measure import Measure
 
 DESC = "Redis measure driver for Opsani Optune"
 VERSION = "0.0.1"
 HAS_CANCEL = True
-
-
-# def calc_decayed_rank(rnk, time):
-#     most_recent_datetime = max(time)
-#     diff = most_recent_datetime - time
-#     diff = diff.dt.total_seconds().astype(int)
-#     diff_max = max(diff)
-#     time_decay = 1 - diff / diff_max
-#     return rnk ** time_decay
 
 
 def init_redis_client():
@@ -30,25 +20,36 @@ def init_redis_client():
     return RedisClient(**kwargs)
 
 
-records = pd.read_csv('~/hn_posts_updated.csv')
+records = pd.read_csv('/tmp/posts.csv')
 records['created_at'] = records['created_at'].astype('datetime64[ns]')
-# rank = records['rank'] = records['num_comments'] + records['num_points']
-# records['rank_decayed'] = calc_decayed_rank(records['rank'], records['created_at'])
-# records.to_csv('~/hn_posts_updated.csv')
 
 
 r_total = len(records)
 r_popular_rank_cutoff = 100
-r_popular = records[records['rank_decayed'] > r_popular_rank_cutoff]
+r_popular = records[records['rank'] > r_popular_rank_cutoff]
 r_popular_count = len(r_popular)
-# r_popular_pct = r_popular_count / records_total
-r_unpopular = records[records['rank_decayed'] <= r_popular_rank_cutoff]
+r_unpopular = records[records['rank'] <= r_popular_rank_cutoff]
 r_unpopular_len = len(r_unpopular)
-# r_unpopular_pct = r_unpopular_len / records_total
 
 popular_posts_frac = .75
 average_post_size_in_bytes = 75 * 1024
-post_contents = open('/home/ubuntu/optune/oco/rnd.txt', 'r').read()[:average_post_size_in_bytes]
+post_random_contents_fpath = '/tmp/post-random-contents.txt'
+
+
+def write_random_contents_file(path):
+    with open(path, 'w') as f:
+        f.write(''.join(random.choice(string.ascii_uppercase + string.digits)
+                        for _ in range(average_post_size_in_bytes)))
+
+
+if not os.path.isfile(post_random_contents_fpath):
+    write_random_contents_file(post_random_contents_fpath)
+else:
+    if os.path.getsize(post_random_contents_fpath) < average_post_size_in_bytes:
+        os.remove(post_random_contents_fpath)
+        write_random_contents_file(post_random_contents_fpath)
+
+post_contents = open(post_random_contents_fpath, 'r').read()[:average_post_size_in_bytes]
 
 u_posts_read = 100
 u_popular_count = int(u_posts_read * popular_posts_frac)
