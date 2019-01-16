@@ -11,7 +11,7 @@ DESC = "Redis measure driver for Opsani Optune"
 VERSION = "0.0.1"
 HAS_CANCEL = True
 
-records = pd.read_csv('posts.csv')
+records = pd.read_csv('hn-posts.csv')
 
 rank_field = os.environ.get('B_RANK_FIELD', 'rank')
 r_total = len(records)

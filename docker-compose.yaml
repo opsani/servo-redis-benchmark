@@ -18,10 +18,6 @@ services:
       REDIS_HOST: redis
     volumes:
       - type: bind
-        source: ./hn-posts.csv
-        target: /servo/posts.csv
-        read_only: True
-      - type: bind
         source: ./secret.yaml
         target: /servo/secret.yaml
         read_only: True
