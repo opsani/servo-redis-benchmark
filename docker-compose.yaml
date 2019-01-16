@@ -1,0 +1,31 @@
+version: '3.2'
+services:
+
+  redis:
+    image: redis:5.0.3
+    volumes:
+      - type: bind
+        source: ./redis.conf
+        target: /data/redis.conf
+    command: redis-server redis.conf
+
+  servo:
+    build: .
+    depends_on:
+      - redis
+    environment:
+      OPTUNE_SECRET: ./secret.yaml
+      REDIS_HOST: redis
+    volumes:
+      - type: bind
+        source: ./hn-posts.csv
+        target: /servo/posts.csv
+        read_only: True
+      - type: bind
+        source: ./secret.yaml
+        target: /servo/secret.yaml
+        read_only: True
+      - type: bind
+        source: ./optune.token
+        target: /servo/optune.token
+    command: --auth-token optune.token ${APP_ID}

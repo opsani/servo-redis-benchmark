@@ -11,27 +11,18 @@ DESC = "Redis measure driver for Opsani Optune"
 VERSION = "0.0.1"
 HAS_CANCEL = True
 
+records = pd.read_csv('posts.csv')
 
-def init_redis_client():
-    prefix = 'optune_redis_'
-    kwargs = {k.lower()[len(prefix):]: v
-              for k, v in os.environ.items()
-              if k.lower().startswith(prefix)}
-    return RedisClient(**kwargs)
-
-
-records = pd.read_csv('/tmp/posts.csv')
-
-
+rank_field = os.environ.get('B_RANK_FIELD', 'rank')
 r_total = len(records)
-r_popular_rank_cutoff = 100
-r_popular = records[records['rank'] > r_popular_rank_cutoff]
+r_popular_rank_cutoff = int(os.environ.get('B_RANK_CUTOFF', 100))
+r_popular = records[records[rank_field] > r_popular_rank_cutoff]
 r_popular_count = len(r_popular)
-r_unpopular = records[records['rank'] <= r_popular_rank_cutoff]
+r_unpopular = records[records[rank_field] <= r_popular_rank_cutoff]
 r_unpopular_len = len(r_unpopular)
 
-popular_posts_frac = .75
-average_post_size_in_bytes = 75 * 1024
+popular_posts_frac = float(os.environ.get('B_POPULAR_POSTS_FRAC', .8))
+average_post_size_in_bytes = int(os.environ.get('B_AVG_POST_SIZE', 50 * 1024))
 post_random_contents_fpath = '/tmp/post-random-contents.txt'
 
 
@@ -50,17 +41,17 @@ else:
 
 post_contents = open(post_random_contents_fpath, 'r').read()[:average_post_size_in_bytes]
 
-u_posts_read = 100
+u_posts_read = int(os.environ.get('B_POSTS_PER_USER', 10))
 u_popular_count = int(u_posts_read * popular_posts_frac)
 u_unpopular_count = u_posts_read - u_popular_count
 
-client = init_redis_client()
+client = RedisClient(host=os.environ.get('REDIS_HOST'))
 
 
 def execute_access_pattern():
     r_pop = r_popular.sample(n=u_popular_count, replace=True)
     r_unpop = r_unpopular.sample(n=u_unpopular_count, replace=True)
-    ds = r_pop.append(r_unpop)
+    ds = r_pop.append(r_unpop).sample(n=u_posts_read, replace=True)
     hits = 0
 
     for _, r in ds.iterrows():
@@ -75,7 +66,6 @@ def execute_access_pattern():
 class RedisDriver(Measure):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.client = init_redis_client()
 
     def measure(self):
         # user_data = self.input_data.setdefault('control', {}).setdefault('userdata', {})
@@ -84,25 +74,25 @@ class RedisDriver(Measure):
         self.progress_message = "Benchmark started"
         self.print_progress()
 
-        # Fill up the cache
         def get_mem_left_pct():
-            used = int(self.client.info('memory')['used_memory']) / 1024 / 1024
-            maxmem = int(self.client.config_get('maxmemory')['maxmemory']) / 1024 / 1024
+            used = int(client.info('memory')['used_memory']) / 2 ** 20
+            maxmem = int(client.config_get('maxmemory')['maxmemory']) / 2 ** 20
             return round((1 - used / maxmem) * 100, 3)
 
         # Fill up cache before sampling measurements
+        fill_up_iters = 10000
         self.progress_message = 'Filling up cache'
-        for i in range(1000):
+        for i in range(fill_up_iters):
             execute_access_pattern()
-            self.progress = int((i / 1000) * 50)
+            self.progress = int((i / fill_up_iters) * 50)
             # Evictions become to appear - cache is filled up
-            if get_mem_left_pct() < .1:
+            if get_mem_left_pct() < float(os.environ.get('B_MEM_LEFT_PCT_FILLUP_THRESHOLD', .05)):
                 self.progress = 50
                 break
 
         # Sample measurements (hits to total requests ratio)
         samples = []
-        samples_take = 20
+        samples_take = int(os.environ.get('B_SAMPLES_COUNT', 20))
         for i in range(samples_take):
             samples.append(execute_access_pattern())
             self.progress = 50 + int(i / samples_take * 50)
