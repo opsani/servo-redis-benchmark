@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
+import math
 import os
 import random
 import string
+import statistics
 
 import pandas as pd
 from redis import Redis as RedisClient
@@ -74,19 +76,25 @@ class RedisDriver(Measure):
         self.progress_message = "Benchmark started"
         self.print_progress()
 
-        def get_mem_left_pct():
-            used = int(client.info('memory')['used_memory']) / 2 ** 20
-            maxmem = int(client.config_get('maxmemory')['maxmemory']) / 2 ** 20
-            return round((1 - used / maxmem) * 100, 3)
+        def get_evictions_count():
+            return int(client.info('stats')['evicted_keys'])
 
         # Fill up cache before sampling measurements
+        client.config_resetstat()
         fill_up_iters = 10000
         self.progress_message = 'Filling up cache'
+        dps = []
         for i in range(fill_up_iters):
-            execute_access_pattern()
+            hits = execute_access_pattern()
             self.progress = int((i / fill_up_iters) * 50)
+
+            dps.append(hits)
+            if len(dps) > 50:
+                dps.pop(0)
+            stdev = math.sqrt(statistics.pvariance(dps)) if len(dps) == 50 else 100
+            self.progress_message = 'Filling up cache. Stdev: {}'.format(stdev)
             # Evictions become to appear - cache is filled up
-            if get_mem_left_pct() < float(os.environ.get('B_MEM_LEFT_PCT_FILLUP_THRESHOLD', .05)):
+            if get_evictions_count() > 0 and stdev < 1.5:
                 self.progress = 50
                 break
 
