@@ -16,6 +16,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - OPTUNE_ACCOUNT=${ACCOUNT}
+      - PROFILE=${PROFILE:-1}
     volumes:
       - type: bind
         source: ./secret.yaml
