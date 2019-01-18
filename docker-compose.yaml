@@ -23,5 +23,6 @@ services:
         read_only: true
       - type: bind
         source: ./optune.token
-        target: /servo/optune.token
-    command: --auth-token optune.token redis-demo
+        target: /run/secrets/optune_auth_token
+        read_only: true
+    command: redis-demo
