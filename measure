@@ -15,7 +15,15 @@ HAS_CANCEL = True
 
 records = pd.read_csv('hn-posts.csv')
 
-rank_field = os.environ.get('B_RANK_FIELD', 'rank')
+profiles = {
+    '1': 'rank',
+    '2': 'rank_decayed',
+}
+profile = os.environ.get('PROFILE', '1')
+try:
+    rank_field = profiles[profile]
+except KeyError:
+    raise Exception('Benchmark profile "{}" does not exist.'.format(profile))
 r_total = len(records)
 r_popular_rank_cutoff = int(os.environ.get('B_RANK_CUTOFF', 115))
 r_popular = records[records[rank_field] > r_popular_rank_cutoff]
