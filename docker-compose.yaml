@@ -14,13 +14,13 @@ services:
     depends_on:
       - redis
     environment:
-      OPTUNE_SECRET: ./secret.yaml
-      REDIS_HOST: redis
+      - REDIS_HOST=redis
+      - OPTUNE_ACCOUNT=${ACCOUNT}
     volumes:
       - type: bind
         source: ./secret.yaml
         target: /servo/secret.yaml
-        read_only: True
+        read_only: true
       - type: bind
         source: ./optune.token
         target: /servo/optune.token

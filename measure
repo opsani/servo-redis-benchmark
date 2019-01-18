@@ -15,7 +15,7 @@ records = pd.read_csv('hn-posts.csv')
 
 rank_field = os.environ.get('B_RANK_FIELD', 'rank')
 r_total = len(records)
-r_popular_rank_cutoff = int(os.environ.get('B_RANK_CUTOFF', 100))
+r_popular_rank_cutoff = int(os.environ.get('B_RANK_CUTOFF', 115))
 r_popular = records[records[rank_field] > r_popular_rank_cutoff]
 r_popular_count = len(r_popular)
 r_unpopular = records[records[rank_field] <= r_popular_rank_cutoff]
@@ -41,7 +41,7 @@ else:
 
 post_contents = open(post_random_contents_fpath, 'r').read()[:average_post_size_in_bytes]
 
-u_posts_read = int(os.environ.get('B_POSTS_PER_USER', 10))
+u_posts_read = int(os.environ.get('B_POSTS_PER_USER', 500))
 u_popular_count = int(u_posts_read * popular_posts_frac)
 u_unpopular_count = u_posts_read - u_popular_count
 
@@ -92,7 +92,7 @@ class RedisDriver(Measure):
 
         # Sample measurements (hits to total requests ratio)
         samples = []
-        samples_take = int(os.environ.get('B_SAMPLES_COUNT', 20))
+        samples_take = int(os.environ.get('B_SAMPLES_COUNT', 50))
         for i in range(samples_take):
             samples.append(execute_access_pattern())
             self.progress = 50 + int(i / samples_take * 50)
