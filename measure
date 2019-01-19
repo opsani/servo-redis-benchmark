@@ -74,9 +74,6 @@ def execute_access_pattern():
 
 
 class RedisDriver(Measure):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def measure(self):
         # user_data = self.input_data.setdefault('control', {}).setdefault('userdata', {})
 
